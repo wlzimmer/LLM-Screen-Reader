@@ -1,0 +1,1069 @@
+Adding Vector Similarity Search to Chrome Extension
+1. Enhanced Tree-RAG with Vector Embeddings
+javascript
+// vector-tree-rag.js
+class VectorTreeRAG {
+  constructor(options = {}) {
+    this.nodeIndex = new Map();
+    this.vectorStore = new Map();
+    this.embeddings = new Map();
+    this.currentId = 0;
+    
+    // Configuration
+    this.config = {
+      embeddingDim: 384, // Use smaller models for browser
+      similarityThreshold: 0.3,
+      maxResults: 10,
+      useLocalEmbeddings: true, // Use browser-compatible models
+      ...options
+    };
+    
+    // Initialize embedding model
+    this.embeddingModel = null;
+    this.initializeEmbeddingModel();
+  }
+
+  async initializeEmbeddingModel() {
+    try {
+      if (this.config.useLocalEmbeddings) {
+        // Use TensorFlow.js with Universal Sentence Encoder Lite
+        await this.loadTensorFlowModel();
+      } else {
+        // Use external API (OpenAI, Cohere, etc.)
+        this.initializeAPIEmbeddings();
+      }
+    } catch (error) {
+      console.warn('Failed to initialize embedding model, falling back to TF-IDF:', error);
+      this.embeddingModel = new TFIDFEmbedder();
+    }
+  }
+
+  async loadTensorFlowModel() {
+    // Load Universal Sentence Encoder Lite (smaller, browser-friendly)
+    const tf = window.tf;
+    if (!tf) {
+      throw new Error('TensorFlow.js not loaded');
+    }
+    
+    try {
+      // Load USE Lite model (you'd need to include this in your extension)
+      this.embeddingModel = await tf.loadLayersModel('/models/use-lite/model.json');
+      console.log('TensorFlow embedding model loaded');
+    } catch (error) {
+      // Fallback to a simpler approach
+      this.embeddingModel = new SimpleEmbedder();
+    }
+  }
+
+  initializeAPIEmbeddings() {
+    this.embeddingModel = new OpenAIEmbedder({
+      apiKey: this.config.openaiKey,
+      model: 'text-embedding-ada-002'
+    });
+  }
+
+  // Enhanced tree building with embeddings
+  async buildTree(rootElement = document.body) {
+    const tree = this.processNode(rootElement);
+    await this.indexTreeWithEmbeddings(tree);
+    return tree;
+  }
+
+  processNode(element) {
+    const nodeId = this.currentId++;
+    
+    const nodeData = {
+      id: nodeId,
+      tagName: element.tagName?.toLowerCase(),
+      textContent: this.getCleanText(element),
+      attributes: this.getRelevantAttributes(element),
+      position: this.getElementPosition(element),
+      visibility: this.isVisible(element),
+      semanticContent: this.extractSemanticContent(element),
+      children: [],
+      parent: null,
+      depth: 0
+    };
+
+    const children = Array.from(element.children || []);
+    nodeData.children = children.map(child => {
+      const childNode = this.processNode(child);
+      childNode.parent = nodeId;
+      childNode.depth = nodeData.depth + 1;
+      return childNode;
+    });
+
+    return nodeData;
+  }
+
+  extractSemanticContent(element) {
+    // Extract rich semantic information for embedding
+    const content = {
+      text: this.getCleanText(element),
+      context: this.getElementContext(element),
+      role: this.getSemanticRole(element),
+      interactions: this.getInteractionHints(element)
+    };
+
+    // Combine into a rich text representation
+    return this.buildSemanticText(content);
+  }
+
+  getElementContext(element) {
+    let context = [];
+    
+    // Add parent context
+    if (element.parentElement) {
+      const parentTag = element.parentElement.tagName.toLowerCase();
+      context.push(`within ${parentTag}`);
+      
+      // Special context for common patterns
+      if (parentTag === 'form') context.push('form element');
+      if (parentTag === 'nav') context.push('navigation');
+      if (parentTag === 'header') context.push('page header');
+      if (parentTag === 'footer') context.push('page footer');
+    }
+
+    // Add sibling context
+    const siblings = Array.from(element.parentElement?.children || []);
+    const siblingTags = siblings
+      .filter(s => s !== element)
+      .map(s => s.tagName.toLowerCase());
+    
+    if (siblingTags.length > 0) {
+      context.push(`among ${siblingTags.slice(0, 3).join(', ')}`);
+    }
+
+    return context.join(', ');
+  }
+
+  getSemanticRole(element) {
+    const tag = element.tagName?.toLowerCase();
+    const role = element.getAttribute('role');
+    const type = element.getAttribute('type');
+    
+    if (role) return role;
+    
+    // Infer semantic roles
+    const roleMap = {
+      'button': 'actionable button',
+      'a': 'link',
+      'input': type ? `${type} input` : 'input field',
+      'select': 'dropdown selection',
+      'textarea': 'text area',
+      'h1': 'main heading',
+      'h2': 'section heading',
+      'h3': 'subsection heading',
+      'nav': 'navigation menu',
+      'form': 'form container',
+      'img': 'image',
+      'video': 'video content'
+    };
+    
+    return roleMap[tag] || tag || 'element';
+  }
+
+  getInteractionHints(element) {
+    const hints = [];
+    const tag = element.tagName?.toLowerCase();
+    
+    if (element.onclick || tag === 'button' || tag === 'a') {
+      hints.push('clickable');
+    }
+    
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+      hints.push('input');
+    }
+    
+    if (element.getAttribute('href')) {
+      hints.push('navigates');
+    }
+    
+    if (element.getAttribute('type') === 'submit') {
+      hints.push('submits form');
+    }
+    
+    return hints.join(', ');
+  }
+
+  buildSemanticText(content) {
+    return [
+      content.text,
+      content.role,
+      content.context,
+      content.interactions
+    ].filter(Boolean).join('. ');
+  }
+
+  // Index tree with embeddings
+  async indexTreeWithEmbeddings(tree) {
+    this.nodeIndex.set(tree.id, tree);
+    
+    // Generate embedding for this node
+    if (tree.semanticContent) {
+      try {
+        const embedding = await this.generateEmbedding(tree.semanticContent);
+        this.embeddings.set(tree.id, embedding);
+        
+        // Store in vector store with metadata
+        this.vectorStore.set(tree.id, {
+          node: tree,
+          embedding: embedding,
+          semanticContent: tree.semanticContent,
+          lastUpdated: Date.now()
+        });
+      } catch (error) {
+        console.warn(`Failed to generate embedding for node ${tree.id}:`, error);
+      }
+    }
+    
+    // Recursively index children
+    for (const child of tree.children) {
+      await this.indexTreeWithEmbeddings(child);
+    }
+  }
+
+  async generateEmbedding(text) {
+    if (!this.embeddingModel) {
+      throw new Error('Embedding model not initialized');
+    }
+    
+    return await this.embeddingModel.embed(text);
+  }
+
+  // Vector similarity search
+  async findSimilarNodes(query, options = {}) {
+    const {
+      maxResults = this.config.maxResults,
+      threshold = this.config.similarityThreshold,
+      filters = {}
+    } = options;
+
+    // Generate query embedding
+    const queryEmbedding = await this.generateEmbedding(query);
+    
+    // Calculate similarities
+    const similarities = [];
+    for (const [nodeId, data] of this.vectorStore) {
+      // Apply filters
+      if (!this.passesFilters(data.node, filters)) continue;
+      
+      // Calculate cosine similarity
+      const similarity = this.cosineSimilarity(queryEmbedding, data.embedding);
+      
+      if (similarity >= threshold) {
+        similarities.push({
+          nodeId,
+          similarity,
+          data,
+          node: data.node
+        });
+      }
+    }
+    
+    // Sort by similarity (highest first)
+    similarities.sort((a, b) => b.similarity - a.similarity);
+    
+    return similarities.slice(0, maxResults);
+  }
+
+  cosineSimilarity(vecA, vecB) {
+    if (vecA.length !== vecB.length) {
+      throw new Error('Vectors must have the same length');
+    }
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    
+    const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
+    return magnitude === 0 ? 0 : dotProduct / magnitude;
+  }
+
+  passesFilters(node, filters) {
+    if (filters.tagName && node.tagName !== filters.tagName.toLowerCase()) {
+      return false;
+    }
+    
+    if (filters.visible !== undefined && node.visibility !== filters.visible) {
+      return false;
+    }
+    
+    if (filters.interactive && !this.isInteractive(node)) {
+      return false;
+    }
+    
+    if (filters.hasText && !node.textContent?.trim()) {
+      return false;
+    }
+    
+    return true;
+  }
+
+  isInteractive(node) {
+    const interactiveTags = ['button', 'a', 'input', 'select', 'textarea'];
+    return interactiveTags.includes(node.tagName);
+  }
+
+  // Hybrid search combining vector similarity and keyword matching
+  async hybridSearch(query, options = {}) {
+    const {
+      vectorWeight = 0.7,
+      keywordWeight = 0.3,
+      ...searchOptions
+    } = options;
+
+    // Get vector similarity results
+    const vectorResults = await this.findSimilarNodes(query, searchOptions);
+    
+    // Get keyword matching results
+    const keywordResults = this.findRelevantNodes(query, searchOptions.maxResults);
+    
+    // Combine and rerank
+    const combinedResults = this.combineSearchResults(
+      vectorResults,
+      keywordResults,
+      vectorWeight,
+      keywordWeight
+    );
+    
+    return combinedResults.slice(0, searchOptions.maxResults || this.config.maxResults);
+  }
+
+  combineSearchResults(vectorResults, keywordResults, vectorWeight, keywordWeight) {
+    const scoreMap = new Map();
+    
+    // Add vector similarity scores
+    vectorResults.forEach(result => {
+      scoreMap.set(result.nodeId, {
+        nodeId: result.nodeId,
+        node: result.node,
+        data: result.data,
+        vectorScore: result.similarity,
+        keywordScore: 0,
+        combinedScore: 0
+      });
+    });
+    
+    // Add keyword scores
+    keywordResults.forEach(result => {
+      const existing = scoreMap.get(result.nodeId) || {
+        nodeId: result.nodeId,
+        node: result.data.node,
+        data: result.data,
+        vectorScore: 0,
+        keywordScore: 0,
+        combinedScore: 0
+      };
+      
+      existing.keywordScore = result.score / 100; // Normalize to 0-1
+      scoreMap.set(result.nodeId, existing);
+    });
+    
+    // Calculate combined scores
+    const results = Array.from(scoreMap.values()).map(result => {
+      result.combinedScore = 
+        (result.vectorScore * vectorWeight) + 
+        (result.keywordScore * keywordWeight);
+      return result;
+    });
+    
+    // Sort by combined score
+    return results.sort((a, b) => b.combinedScore - a.combinedScore);
+  }
+
+  // Fallback keyword search (from original implementation)
+  findRelevantNodes(query, maxResults = 10) {
+    const queryVector = this.simpleHash(query.toLowerCase());
+    const scores = [];
+    
+    for (const [nodeId, data] of this.vectorStore) {
+      const score = this.calculateRelevance(query, data);
+      if (score > 0) {
+        scores.push({ nodeId, score, data });
+      }
+    }
+    
+    return scores
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults);
+  }
+
+  calculateRelevance(query, nodeData) {
+    const { node } = nodeData;
+    let score = 0;
+    const queryLower = query.toLowerCase();
+    
+    // Text content matching
+    if (node.textContent?.toLowerCase().includes(queryLower)) {
+      score += 10;
+    }
+    
+    // Tag relevance
+    if (node.tagName?.includes(queryLower)) {
+      score += 5;
+    }
+    
+    // Attribute matching
+    const classAttr = node.attributes?.class || '';
+    const idAttr = node.attributes?.id || '';
+    
+    if (classAttr.toLowerCase().includes(queryLower) || 
+        idAttr.toLowerCase().includes(queryLower)) {
+      score += 7;
+    }
+    
+    return score;
+  }
+
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash;
+  }
+}
+
+// Embedding implementations
+class SimpleEmbedder {
+  constructor() {
+    this.vocabulary = new Map();
+    this.idfScores = new Map();
+    this.embeddingDim = 100;
+  }
+  
+  async embed(text) {
+    // Simple TF-IDF based embeddings
+    const tokens = this.tokenize(text.toLowerCase());
+    const embedding = new Array(this.embeddingDim).fill(0);
+    
+    tokens.forEach((token, index) => {
+      const hash = this.hashToken(token) % this.embeddingDim;
+      embedding[hash] += 1;
+    });
+    
+    // Normalize
+    const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+    return norm > 0 ? embedding.map(val => val / norm) : embedding;
+  }
+  
+  tokenize(text) {
+    return text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length > 2);
+  }
+  
+  hashToken(token) {
+    let hash = 0;
+    for (let i = 0; i < token.length; i++) {
+      hash = ((hash << 5) - hash) + token.charCodeAt(i);
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
+  }
+}
+
+class OpenAIEmbedder {
+  constructor(options) {
+    this.apiKey = options.apiKey;
+    this.model = options.model || 'text-embedding-ada-002';
+    this.cache = new Map();
+  }
+  
+  async embed(text) {
+    // Check cache first
+    if (this.cache.has(text)) {
+      return this.cache.get(text);
+    }
+    
+    try {
+      const response = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          input: text,
+          model: this.model
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const embedding = data.data[0].embedding;
+      
+      // Cache the result
+      this.cache.set(text, embedding);
+      
+      return embedding;
+    } catch (error) {
+      console.error('OpenAI embedding error:', error);
+      // Fallback to simple embedding
+      return await new SimpleEmbedder().embed(text);
+    }
+  }
+}
+
+// TensorFlow.js embedder (requires TF.js to be loaded)
+class TensorFlowEmbedder {
+  constructor(modelPath) {
+    this.modelPath = modelPath;
+    this.model = null;
+  }
+  
+  async initialize() {
+    if (typeof tf !== 'undefined') {
+      this.model = await tf.loadLayersModel(this.modelPath);
+    } else {
+      throw new Error('TensorFlow.js not available');
+    }
+  }
+  
+  async embed(text) {
+    if (!this.model) {
+      await this.initialize();
+    }
+    
+    // Preprocess text (tokenization, etc.)
+    const tokens = this.preprocessText(text);
+    
+    // Generate embeddings using the model
+    const inputTensor = tf.tensor2d([tokens]);
+    const predictions = await this.model.predict(inputTensor);
+    const embedding = await predictions.data();
+    
+    // Clean up tensors
+    inputTensor.dispose();
+    predictions.dispose();
+    
+    return Array.from(embedding);
+  }
+  
+  preprocessText(text) {
+    // Simple preprocessing - in production, you'd use proper tokenization
+    return text.toLowerCase()
+      .split(' ')
+      .map(word => this.getWordIndex(word))
+      .slice(0, 512); // Limit sequence length
+  }
+  
+  getWordIndex(word) {
+    // Simple word to index mapping
+    // In production, use a proper vocabulary
+    return word.split('').reduce((hash, char) => 
+      ((hash << 5) - hash) + char.charCodeAt(0), 0) % 10000;
+  }
+}
+
+// Export
+window.VectorTreeRAG = VectorTreeRAG;
+2. Enhanced Content Script with Vector Search
+javascript
+// enhanced-content.js
+class EnhancedContentAnalyzer {
+  constructor() {
+    this.vectorTreeRAG = new VectorTreeRAG({
+      useLocalEmbeddings: true,
+      similarityThreshold: 0.3,
+      maxResults: 15
+    });
+    this.domTree = null;
+    this.isInitialized = false;
+    this.initialize();
+  }
+
+  async initialize() {
+    try {
+      // Wait for embedding model to initialize
+      await this.vectorTreeRAG.initializeEmbeddingModel();
+      
+      // Build tree when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => this.buildTree());
+      } else {
+        await this.buildTree();
+      }
+
+      // Listen for messages
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        this.handleMessage(message, sendResponse);
+      });
+      
+      this.isInitialized = true;
+      console.log('Enhanced Content Analyzer initialized');
+    } catch (error) {
+      console.error('Failed to initialize Enhanced Content Analyzer:', error);
+    }
+  }
+
+  async buildTree() {
+    try {
+      console.log('Building vector tree...');
+      this.domTree = await this.vectorTreeRAG.buildTree(document.body);
+      console.log('Vector tree built successfully:', this.domTree);
+    } catch (error) {
+      console.error('Error building vector tree:', error);
+    }
+  }
+
+  async handleMessage(message, sendResponse) {
+    if (!this.isInitialized || !this.domTree) {
+      sendResponse({ error: 'Analyzer not ready yet' });
+      return;
+    }
+
+    try {
+      switch (message.action) {
+        case 'vectorSearch':
+          await this.handleVectorSearch(message, sendResponse);
+          break;
+        case 'hybridSearch':
+          await this.handleHybridSearch(message, sendResponse);
+          break;
+        case 'semanticQuery':
+          await this.handleSemanticQuery(message, sendResponse);
+          break;
+        case 'findSimilarElements':
+          await this.handleFindSimilarElements(message, sendResponse);
+          break;
+        default:
+          sendResponse({ error: 'Unknown action' });
+      }
+    } catch (error) {
+      console.error('Error handling message:', error);
+      sendResponse({ error: error.message });
+    }
+  }
+
+  async handleVectorSearch(message, sendResponse) {
+    const { query, options = {} } = message;
+    
+    const results = await this.vectorTreeRAG.findSimilarNodes(query, {
+      maxResults: options.maxResults || 10,
+      threshold: options.threshold || 0.3,
+      filters: options.filters || {}
+    });
+
+    const formattedResults = results.map(result => ({
+      node: result.node,
+      similarity: result.similarity,
+      semanticContent: result.data.semanticContent,
+      path: this.vectorTreeRAG.getNodePath ? this.vectorTreeRAG.getNodePath(result.nodeId) : null,
+      context: this.getStructuredContext(result.nodeId)
+    }));
+
+    sendResponse({
+      results: formattedResults,
+      query,
+      searchType: 'vector',
+      timestamp: Date.now()
+    });
+  }
+
+  async handleHybridSearch(message, sendResponse) {
+    const { query, options = {} } = message;
+    
+    const results = await this.vectorTreeRAG.hybridSearch(query, {
+      maxResults: options.maxResults || 10,
+      vectorWeight: options.vectorWeight || 0.7,
+      keywordWeight: options.keywordWeight || 0.3,
+      filters: options.filters || {}
+    });
+
+    const formattedResults = results.map(result => ({
+      node: result.node,
+      combinedScore: result.combinedScore,
+      vectorScore: result.vectorScore,
+      keywordScore: result.keywordScore,
+      semanticContent: result.data?.semanticContent,
+      path: this.vectorTreeRAG.getNodePath ? this.vectorTreeRAG.getNodePath(result.nodeId) : null
+    }));
+
+    sendResponse({
+      results: formattedResults,
+      query,
+      searchType: 'hybrid',
+      weights: { vector: options.vectorWeight || 0.7, keyword: options.keywordWeight || 0.3 }
+    });
+  }
+
+  async handleSemanticQuery(message, sendResponse) {
+    const { query, intent, options = {} } = message;
+    
+    // Enhanced query with intent understanding
+    const enhancedQuery = this.buildEnhancedQuery(query, intent);
+    
+    const results = await this.vectorTreeRAG.findSimilarNodes(enhancedQuery, {
+      ...options,
+      filters: this.getIntentFilters(intent)
+    });
+
+    sendResponse({
+      results: results.map(r => ({
+        node: r.node,
+        similarity: r.similarity,
+        relevanceReason: this.explainRelevance(r, query, intent),
+        actionable: this.isActionable(r.node, intent)
+      })),
+      query: enhancedQuery,
+      originalQuery: query,
+      intent
+    });
+  }
+
+  async handleFindSimilarElements(message, sendResponse) {
+    const { referenceNodeId, options = {} } = message;
+    
+    const referenceData = this.vectorTreeRAG.vectorStore.get(referenceNodeId);
+    if (!referenceData) {
+      sendResponse({ error: 'Reference node not found' });
+      return;
+    }
+
+    // Find elements similar to the reference element
+    const similarities = [];
+    for (const [nodeId, data] of this.vectorTreeRAG.vectorStore) {
+      if (nodeId === referenceNodeId) continue; // Skip self
+      
+      const similarity = this.vectorTreeRAG.cosineSimilarity(
+        referenceData.embedding,
+        data.embedding
+      );
+      
+      if (similarity >= (options.threshold || 0.5)) {
+        similarities.push({
+          nodeId,
+          similarity,
+          node: data.node,
+          semanticContent: data.semanticContent
+        });
+      }
+    }
+
+    similarities.sort((a, b) => b.similarity - a.similarity);
+
+    sendResponse({
+      results: similarities.slice(0, options.maxResults || 10),
+      referenceNode: referenceData.node,
+      searchType: 'similarity'
+    });
+  }
+
+  buildEnhancedQuery(query, intent) {
+    const intentKeywords = {
+      'navigation': 'link navigate menu',
+      'form_interaction': 'input button submit form',
+      'content_extraction': 'text content information',
+      'action': 'click button interact'
+    };
+    
+    const enhancement = intentKeywords[intent] || '';
+    return `${query} ${enhancement}`.trim();
+  }
+
+  getIntentFilters(intent) {
+    const intentFilters = {
+      'navigation': { interactive: true, tagName: 'a' },
+      'form_interaction': { interactive: true, tagName: ['input', 'button', 'select', 'textarea'] },
+      'action': { interactive: true },
+      'content_extraction': { hasText: true }
+    };
+    
+    return intentFilters[intent] || {};
+  }
+
+  explainRelevance(result, query, intent) {
+    const reasons = [];
+    
+    if (result.similarity > 0.8) reasons.push('High semantic similarity');
+    if (result.node.textContent?.toLowerCase().includes(query.toLowerCase())) {
+      reasons.push('Contains query text');
+    }
+    if (intent === 'action' && this.vectorTreeRAG.isInteractive(result.node)) {
+      reasons.push('Interactive element matching intent');
+    }
+    
+    return reasons.join(', ') || 'Semantic match';
+  }
+
+  isActionable(node, intent) {
+    if (intent === 'navigation') return node.tagName === 'a' && node.attributes.href;
+    if (intent === 'form_interaction') return this.vectorTreeRAG.isInteractive(node);
+    if (intent === 'action') return this.vectorTreeRAG.isInteractive(node);
+    return false;
+  }
+
+  getStructuredContext(nodeId) {
+    // Reuse existing context method or implement similar functionality
+    return {
+      nodeId,
+      path: this.vectorTreeRAG.getNodePath ? this.vectorTreeRAG.getNodePath(nodeId) : 'N/A'
+    };
+  }
+}
+
+// Initialize enhanced content analyzer
+const enhancedContentAnalyzer = new EnhancedContentAnalyzer();
+3. Updated Popup with Vector Search Options
+javascript
+// enhanced-popup.js
+class EnhancedPopupInterface {
+  constructor() {
+    this.aiClient = null;
+    this.initialize();
+  }
+
+  initialize() {
+    // Enhanced search buttons
+    document.getElementById('vectorSearchBtn').addEventListener('click', () => this.handleVectorSearch());
+    document.getElementById('hybridSearchBtn').addEventListener('click', () => this.handleHybridSearch());
+    document.getElementById('semanticQueryBtn').addEventListener('click', () => this.handleSemanticQuery());
+    
+    // Search options
+    document.getElementById('similarityThreshold').addEventListener('input', (e) => {
+      document.getElementById('thresholdValue').textContent = e.target.value;
+    });
+  }
+
+  async handleVectorSearch() {
+    const query = document.getElementById('queryInput').value;
+    const threshold = parseFloat(document.getElementById('similarityThreshold').value);
+    const maxResults = parseInt(document.getElementById('maxResults').value);
+    
+    if (!query) return;
+
+    this.showLoading(true);
+    this.clearError();
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'vectorSearch',
+        query: query,
+        options: {
+          threshold: threshold,
+          maxResults: maxResults,
+          filters: this.getSelectedFilters()
+        }
+      });
+
+      this.displayVectorResults(response);
+      
+    } catch (error) {
+      this.showError('Vector search error: ' + error.message);
+    } finally {
+      this.showLoading(false);
+    }
+  }
+
+  async handleHybridSearch() {
+    const query = document.getElementById('queryInput').value;
+    const vectorWeight = parseFloat(document.getElementById('vectorWeight').value);
+    const keywordWeight = 1 - vectorWeight;
+    
+    if (!query) return;
+
+    this.showLoading(true);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'hybridSearch',
+        query: query,
+        options: {
+          vectorWeight: vectorWeight,
+          keywordWeight: keywordWeight,
+          maxResults: parseInt(document.getElementById('maxResults').value)
+        }
+      });
+
+      this.displayHybridResults(response);
+      
+    } catch (error) {
+      this.showError('Hybrid search error: ' + error.message);
+    } finally {
+      this.showLoading(false);
+    }
+  }
+
+  async handleSemanticQuery() {
+    const query = document.getElementById('queryInput').value;
+    const intent = document.getElementById('intentSelect').value;
+    
+    if (!query) return;
+
+    this.showLoading(true);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'semanticQuery',
+        query: query,
+        intent: intent,
+        options: {
+          maxResults: parseInt(document.getElementById('maxResults').value)
+        }
+      });
+
+      this.displaySemanticResults(response);
+      
+    } catch (error) {
+      this.showError('Semantic query error: ' + error.message);
+    } finally {
+      this.showLoading(false);
+    }
+  }
+
+  getSelectedFilters() {
+    const filters = {};
+    
+    const tagFilter = document.getElementById('tagFilter').value;
+    if (tagFilter && tagFilter !== 'any') {
+      filters.tagName = tagFilter;
+    }
+    
+    if (document.getElementById('interactiveOnly').checked) {
+      filters.interactive = true;
+    }
+    
+    if (document.getElementById('visibleOnly').checked) {
+      filters.visible = true;
+    }
+    
+    return filters;
+  }
+
+  displayVectorResults(response) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>Vector Search Results:</h4>
+      <div class="search-meta">
+        Query: "${response.query}" | Found: ${response.results.length} results
+      </div>
+    `;
+    
+    response.results.forEach((result, index) => {
+      const div = document.createElement('div');
+      div.className = 'result-item vector-result';
+      div.innerHTML = `
+        <div class="result-header">
+          <strong>${result.node.tagName.toUpperCase()}</strong>
+          <span class="similarity-score">Similarity: ${(result.similarity * 100).toFixed(1)}%</span>
+        </div>
+        <div class="result-content">
+          <div class="text-content">${result.node.textContent || 'No text'}</div>
+          <div class="semantic-content">${result.semanticContent || 'N/A'}</div>
+        </div>
+        <div class="result-meta">
+          Path: ${result.path || 'N/A'}
+        </div>
+        <button onclick="this.highlightElement('${result.node.id}')" class="highlight-btn">
+          Highlight on Page
+        </button>
+      `;
+      resultsDiv.appendChild(div);
+    });
+  }
+
+  displayHybridResults(response) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>Hybrid Search Results:</h4>
+      <div class="search-meta">
+        Query: "${response.query}" | Vector Weight: ${response.weights.vector} | Keyword Weight: ${response.weights.keyword}
+      </div>
+    `;
+    
+    response.results.forEach((result, index) => {
+      const div = document.createElement('div');
+      div.className = 'result-item hybrid-result';
+      div.innerHTML = `
+        <div class="result-header">
+          <strong>${result.node.tagName.toUpperCase()}</strong>
+          <span class="combined-score">Combined: ${(result.combinedScore * 100).toFixed(1)}%</span>
+        </div>
+        <div class="score-breakdown">
+          <span class="vector-score">Vector: ${(result.vectorScore * 100).toFixed(1)}%</span>
+          <span class="keyword-score">Keyword: ${(result.keywordScore * 100).toFixed(1)}%</span>
+        </div>
+        <div class="result-content">
+          <div class="text-content">${result.node.textContent || 'No text'}</div>
+          ${result.semanticContent ? `<div class="semantic-content">${result.semanticContent}</div>` : ''}
+        </div>
+        <div class="result-meta">
+          Path: ${result.path || 'N/A'}
+        </div>
+      `;
+      resultsDiv.appendChild(div);
+    });
+  }
+
+  displaySemanticResults(response) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>Semantic Query Results:</h4>
+      <div class="search-meta">
+        Original: "${response.originalQuery}" | Enhanced: "${response.query}" | Intent: ${response.intent}
+      </div>
+    `;
+    
+    response.results.forEach((result, index) => {
+      const div = document.createElement('div');
+      div.className = `result-item semantic-result ${result.actionable ? 'actionable' : ''}`;
+      div.innerHTML = `
+        <div class="result-header">
+          <strong>${result.node.tagName.toUpperCase()}</strong>
+          <span class="similarity-score">Similarity: ${(result.similarity * 100).toFixed(1)}%</span>
+          ${result.actionable ? '<span class="actionable-badge">Actionable</span>' : ''}
+        </div>
+        <div class="result-content">
+          <div class="text-content">${result.node.textContent || 'No text'}</div>
+          <div class="relevance-reason">${result.relevanceReason}</div>
+        </div>
+      `;
+      resultsDiv.appendChild(div);
+    });
+  }
+
+  highlightElement(nodeId) {
+    // Send message to content script to highlight element
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        action: 'highlightElement',
+        nodeId: nodeId
+      });
+    });
+  }
+
+  showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'block' : 'none';
+  }
+
+  showError(message) {
+    document.getElementById('error').textContent = message;
+  }
+
+  clearError() {
+    document.getElementById('error').textContent = '';
+  }
+}
+
+// Initialize enhanced popup
+const enhancedPopup = new EnhancedPopupInterface();

@@ -1,0 +1,825 @@
+Chrome Extension with Tree-RAG Implementation
+Project Structure
+my-extension/
+├── manifest.json
+├── background.js
+├── content.js
+├── popup.html
+├── popup.js
+├── tree-rag.js
+├── ai-client.js
+└── styles.css
+1. Manifest Configuration
+json
+{
+  "manifest_version": 3,
+  "name": "AI Tree-RAG Extension",
+  "version": "1.0",
+  "description": "Chrome extension with AI integration using tree-RAG",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["tree-rag.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Tree-RAG"
+  }
+}
+2. Tree-RAG Implementation
+javascript
+// tree-rag.js
+class TreeRAG {
+  constructor() {
+    this.nodeIndex = new Map();
+    this.vectorStore = new Map();
+    this.currentId = 0;
+  }
+
+  // Build tree structure from DOM
+  buildTree(rootElement = document.body) {
+    const tree = this.processNode(rootElement);
+    this.indexTree(tree);
+    return tree;
+  }
+
+  processNode(element) {
+    const nodeId = this.currentId++;
+    
+    // Extract element information
+    const nodeData = {
+      id: nodeId,
+      tagName: element.tagName?.toLowerCase(),
+      textContent: this.getCleanText(element),
+      attributes: this.getRelevantAttributes(element),
+      position: this.getElementPosition(element),
+      visibility: this.isVisible(element),
+      children: [],
+      parent: null,
+      depth: 0
+    };
+
+    // Process children
+    const children = Array.from(element.children || []);
+    nodeData.children = children.map(child => {
+      const childNode = this.processNode(child);
+      childNode.parent = nodeId;
+      childNode.depth = nodeData.depth + 1;
+      return childNode;
+    });
+
+    return nodeData;
+  }
+
+  getCleanText(element) {
+    // Get direct text content, excluding children
+    let text = '';
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent.trim();
+      }
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  getRelevantAttributes(element) {
+    const relevantAttrs = ['id', 'class', 'href', 'src', 'alt', 'title', 'placeholder', 'value', 'type', 'role', 'aria-label'];
+    const attrs = {};
+    
+    relevantAttrs.forEach(attr => {
+      const value = element.getAttribute(attr);
+      if (value) attrs[attr] = value;
+    });
+    
+    return attrs;
+  }
+
+  getElementPosition(element) {
+    try {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height
+      };
+    } catch (e) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+  }
+
+  isVisible(element) {
+    try {
+      const style = window.getComputedStyle(element);
+      return style.display !== 'none' && 
+             style.visibility !== 'hidden' && 
+             style.opacity !== '0';
+    } catch (e) {
+      return true;
+    }
+  }
+
+  // Index tree for efficient retrieval
+  indexTree(tree) {
+    this.nodeIndex.set(tree.id, tree);
+    this.createSemanticVector(tree);
+    
+    tree.children.forEach(child => {
+      this.indexTree(child);
+    });
+  }
+
+  createSemanticVector(node) {
+    // Create a semantic representation for RAG
+    const features = {
+      text: node.textContent || '',
+      tag: node.tagName || '',
+      classes: node.attributes.class || '',
+      id: node.attributes.id || '',
+      context: this.getContextualInfo(node)
+    };
+    
+    // Simple semantic vector (in production, use embeddings)
+    const vector = this.simpleHash(JSON.stringify(features));
+    this.vectorStore.set(node.id, { node, vector, features });
+  }
+
+  getContextualInfo(node) {
+    // Get contextual information from ancestors and siblings
+    let context = '';
+    
+    if (node.parent) {
+      const parent = this.nodeIndex.get(node.parent);
+      context += `parent:${parent.tagName} `;
+    }
+    
+    // Add semantic context based on structure
+    if (node.tagName === 'button' || node.tagName === 'input') {
+      context += 'interactive ';
+    }
+    
+    if (node.tagName === 'h1' || node.tagName === 'h2' || node.tagName === 'h3') {
+      context += 'heading ';
+    }
+    
+    return context;
+  }
+
+  simpleHash(str) {
+    // Simple hash function for demonstration
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash;
+  }
+
+  // Query methods for RAG
+  findRelevantNodes(query, maxResults = 10) {
+    const queryVector = this.simpleHash(query.toLowerCase());
+    const scores = [];
+    
+    for (const [nodeId, data] of this.vectorStore) {
+      const score = this.calculateRelevance(query, data);
+      if (score > 0) {
+        scores.push({ nodeId, score, data });
+      }
+    }
+    
+    return scores
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults);
+  }
+
+  calculateRelevance(query, nodeData) {
+    const { features, node } = nodeData;
+    let score = 0;
+    
+    const queryLower = query.toLowerCase();
+    
+    // Text content matching
+    if (features.text.toLowerCase().includes(queryLower)) {
+      score += 10;
+    }
+    
+    // Tag relevance
+    if (features.tag.includes(queryLower)) {
+      score += 5;
+    }
+    
+    // Class/ID matching
+    if (features.classes.toLowerCase().includes(queryLower) || 
+        features.id.toLowerCase().includes(queryLower)) {
+      score += 7;
+    }
+    
+    // Context relevance
+    if (features.context.toLowerCase().includes(queryLower)) {
+      score += 3;
+    }
+    
+    // Boost for interactive elements if query suggests interaction
+    if (queryLower.includes('click') || queryLower.includes('button')) {
+      if (node.tagName === 'button' || node.tagName === 'a' || 
+          (node.tagName === 'input' && node.attributes.type === 'submit')) {
+        score += 5;
+      }
+    }
+    
+    return score;
+  }
+
+  getNodePath(nodeId) {
+    const node = this.nodeIndex.get(nodeId);
+    if (!node) return '';
+    
+    const path = [];
+    let current = node;
+    
+    while (current) {
+      path.unshift(`${current.tagName}${current.attributes.id ? '#' + current.attributes.id : ''}`);
+      current = current.parent ? this.nodeIndex.get(current.parent) : null;
+    }
+    
+    return path.join(' > ');
+  }
+
+  // Get structured context for AI
+  getStructuredContext(nodeId, includeAncestors = true, includeSiblings = true) {
+    const node = this.nodeIndex.get(nodeId);
+    if (!node) return null;
+    
+    const context = {
+      target: node,
+      path: this.getNodePath(nodeId),
+      ancestors: [],
+      siblings: [],
+      children: node.children
+    };
+    
+    if (includeAncestors && node.parent) {
+      let current = this.nodeIndex.get(node.parent);
+      while (current) {
+        context.ancestors.push({
+          tagName: current.tagName,
+          textContent: current.textContent,
+          attributes: current.attributes
+        });
+        current = current.parent ? this.nodeIndex.get(current.parent) : null;
+      }
+    }
+    
+    if (includeSiblings && node.parent) {
+      const parent = this.nodeIndex.get(node.parent);
+      context.siblings = parent.children.filter(child => child.id !== nodeId);
+    }
+    
+    return context;
+  }
+}
+
+// Make available globally
+window.TreeRAG = TreeRAG;
+3. Content Script
+javascript
+// content.js
+class ContentAnalyzer {
+  constructor() {
+    this.treeRAG = new TreeRAG();
+    this.domTree = null;
+    this.initialize();
+  }
+
+  initialize() {
+    // Build tree when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => this.buildTree());
+    } else {
+      this.buildTree();
+    }
+
+    // Listen for messages from popup/background
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      this.handleMessage(message, sendResponse);
+    });
+  }
+
+  buildTree() {
+    try {
+      this.domTree = this.treeRAG.buildTree(document.body);
+      console.log('Tree-RAG built successfully:', this.domTree);
+    } catch (error) {
+      console.error('Error building tree:', error);
+    }
+  }
+
+  handleMessage(message, sendResponse) {
+    switch (message.action) {
+      case 'queryPage':
+        this.handleQuery(message.query, sendResponse);
+        break;
+      case 'getPageInfo':
+        this.getPageInfo(sendResponse);
+        break;
+      case 'findElements':
+        this.findElements(message.criteria, sendResponse);
+        break;
+    }
+  }
+
+  handleQuery(query, sendResponse) {
+    if (!this.domTree) {
+      sendResponse({ error: 'Tree not built yet' });
+      return;
+    }
+
+    const relevantNodes = this.treeRAG.findRelevantNodes(query);
+    const results = relevantNodes.map(result => {
+      const context = this.treeRAG.getStructuredContext(result.nodeId);
+      return {
+        node: result.data.node,
+        context: context,
+        relevanceScore: result.score,
+        path: this.treeRAG.getNodePath(result.nodeId)
+      };
+    });
+
+    sendResponse({ results, query });
+  }
+
+  getPageInfo(sendResponse) {
+    const info = {
+      title: document.title,
+      url: window.location.href,
+      nodeCount: this.treeRAG.nodeIndex.size,
+      structure: this.getPageStructure()
+    };
+    
+    sendResponse(info);
+  }
+
+  getPageStructure() {
+    const structure = {
+      headings: [],
+      forms: [],
+      links: [],
+      buttons: []
+    };
+
+    for (const [nodeId, data] of this.treeRAG.vectorStore) {
+      const node = data.node;
+      
+      if (node.tagName && node.tagName.match(/h[1-6]/)) {
+        structure.headings.push({
+          level: node.tagName,
+          text: node.textContent,
+          path: this.treeRAG.getNodePath(nodeId)
+        });
+      }
+      
+      if (node.tagName === 'form') {
+        structure.forms.push({
+          action: node.attributes.action,
+          method: node.attributes.method,
+          path: this.treeRAG.getNodePath(nodeId)
+        });
+      }
+      
+      if (node.tagName === 'a' && node.attributes.href) {
+        structure.links.push({
+          href: node.attributes.href,
+          text: node.textContent,
+          path: this.treeRAG.getNodePath(nodeId)
+        });
+      }
+      
+      if (node.tagName === 'button' || 
+          (node.tagName === 'input' && node.attributes.type === 'submit')) {
+        structure.buttons.push({
+          text: node.textContent || node.attributes.value,
+          type: node.attributes.type,
+          path: this.treeRAG.getNodePath(nodeId)
+        });
+      }
+    }
+
+    return structure;
+  }
+
+  findElements(criteria, sendResponse) {
+    const results = this.treeRAG.findRelevantNodes(criteria.query);
+    const elements = results
+      .filter(result => {
+        const node = result.data.node;
+        return criteria.elementType ? 
+          node.tagName === criteria.elementType.toLowerCase() : 
+          true;
+      })
+      .map(result => ({
+        element: result.data.node,
+        context: this.treeRAG.getStructuredContext(result.nodeId),
+        score: result.score
+      }));
+
+    sendResponse({ elements, criteria });
+  }
+}
+
+// Initialize content analyzer
+const contentAnalyzer = new ContentAnalyzer();
+4. AI Client Integration
+javascript
+// ai-client.js
+class AIClient {
+  constructor(apiKey, baseUrl = 'https://api.openai.com/v1') {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+  }
+
+  async queryWithContext(query, treeContext) {
+    const systemPrompt = `
+You are an AI assistant that analyzes web pages using structured tree data. 
+You have access to the DOM tree structure with hierarchical relationships.
+Use this context to provide accurate and relevant responses about the webpage content.
+
+Tree Context:
+${JSON.stringify(treeContext, null, 2)}
+`;
+
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: query }
+        ],
+        temperature: 0.7,
+        max_tokens: 1000
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  }
+
+  async analyzePageStructure(pageInfo) {
+    const prompt = `
+Analyze this webpage structure and provide insights:
+- Main content areas
+- Navigation structure
+- Interactive elements
+- Information architecture
+
+Page Info: ${JSON.stringify(pageInfo, null, 2)}
+`;
+
+    return this.queryWithContext(prompt, pageInfo);
+  }
+
+  async findActionableElements(query, elements) {
+    const prompt = `
+Based on the user query: "${query}"
+Find and recommend the most relevant actionable elements from the page.
+Provide step-by-step instructions if applicable.
+
+Available Elements: ${JSON.stringify(elements, null, 2)}
+`;
+
+    return this.queryWithContext(prompt, { query, elements });
+  }
+}
+
+// Export for use in popup
+window.AIClient = AIClient;
+5. Popup Interface
+html
+<!-- popup.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 400px;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+    }
+    
+    .query-section {
+      margin-bottom: 20px;
+    }
+    
+    #queryInput {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    
+    button {
+      background: #4285f4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background: #3367d6;
+    }
+    
+    .results {
+      margin-top: 20px;
+    }
+    
+    .result-item {
+      background: #f5f5f5;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    
+    .loading {
+      display: none;
+      text-align: center;
+      margin: 20px 0;
+    }
+    
+    .error {
+      color: red;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="query-section">
+    <h3>AI Page Assistant</h3>
+    <input type="text" id="queryInput" placeholder="Ask about this page..." />
+    <button id="queryBtn">Analyze</button>
+    <button id="structureBtn">Page Structure</button>
+  </div>
+  
+  <div id="loading" class="loading">Processing...</div>
+  <div id="error" class="error"></div>
+  <div id="results" class="results"></div>
+
+  <script src="ai-client.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
+javascript
+// popup.js
+class PopupInterface {
+  constructor() {
+    this.aiClient = null;
+    this.initialize();
+  }
+
+  initialize() {
+    document.getElementById('queryBtn').addEventListener('click', () => this.handleQuery());
+    document.getElementById('structureBtn').addEventListener('click', () => this.analyzeStructure());
+    
+    // Initialize AI client (you'd get API key from storage)
+    chrome.storage.sync.get(['openaiKey'], (result) => {
+      if (result.openaiKey) {
+        this.aiClient = new AIClient(result.openaiKey);
+      }
+    });
+  }
+
+  async handleQuery() {
+    const query = document.getElementById('queryInput').value;
+    if (!query) return;
+
+    this.showLoading(true);
+    this.clearError();
+
+    try {
+      // Get current tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      // Query the content script
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'queryPage',
+        query: query
+      });
+
+      if (response.error) {
+        throw new Error(response.error);
+      }
+
+      // Use AI to process results if available
+      if (this.aiClient && response.results.length > 0) {
+        const aiResponse = await this.aiClient.findActionableElements(query, response.results);
+        this.displayAIResponse(aiResponse, response.results);
+      } else {
+        this.displayResults(response.results);
+      }
+
+    } catch (error) {
+      this.showError('Error: ' + error.message);
+    } finally {
+      this.showLoading(false);
+    }
+  }
+
+  async analyzeStructure() {
+    this.showLoading(true);
+    this.clearError();
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      const pageInfo = await chrome.tabs.sendMessage(tab.id, {
+        action: 'getPageInfo'
+      });
+
+      if (this.aiClient) {
+        const analysis = await this.aiClient.analyzePageStructure(pageInfo);
+        this.displayAnalysis(analysis);
+      } else {
+        this.displayPageInfo(pageInfo);
+      }
+
+    } catch (error) {
+      this.showError('Error: ' + error.message);
+    } finally {
+      this.showLoading(false);
+    }
+  }
+
+  displayResults(results) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = '<h4>Found Elements:</h4>';
+    
+    results.forEach((result, index) => {
+      const div = document.createElement('div');
+      div.className = 'result-item';
+      div.innerHTML = `
+        <strong>${result.node.tagName}</strong>
+        <br>Text: ${result.node.textContent || 'N/A'}
+        <br>Path: ${result.path}
+        <br>Score: ${result.relevanceScore}
+      `;
+      resultsDiv.appendChild(div);
+    });
+  }
+
+  displayAIResponse(aiResponse, results) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>AI Analysis:</h4>
+      <div class="result-item">
+        <pre>${aiResponse}</pre>
+      </div>
+      <h4>Relevant Elements:</h4>
+    `;
+    
+    results.slice(0, 3).forEach(result => {
+      const div = document.createElement('div');
+      div.className = 'result-item';
+      div.innerHTML = `
+        <strong>${result.node.tagName}</strong>: ${result.node.textContent || 'N/A'}
+      `;
+      resultsDiv.appendChild(div);
+    });
+  }
+
+  displayAnalysis(analysis) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>Page Analysis:</h4>
+      <div class="result-item">
+        <pre>${analysis}</pre>
+      </div>
+    `;
+  }
+
+  displayPageInfo(info) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = `
+      <h4>Page Information:</h4>
+      <div class="result-item">
+        <strong>Title:</strong> ${info.title}<br>
+        <strong>Nodes:</strong> ${info.nodeCount}<br>
+        <strong>Headings:</strong> ${info.structure.headings.length}<br>
+        <strong>Forms:</strong> ${info.structure.forms.length}<br>
+        <strong>Links:</strong> ${info.structure.links.length}<br>
+        <strong>Buttons:</strong> ${info.structure.buttons.length}
+      </div>
+    `;
+  }
+
+  showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'block' : 'none';
+  }
+
+  showError(message) {
+    document.getElementById('error').textContent = message;
+  }
+
+  clearError() {
+    document.getElementById('error').textContent = '';
+  }
+}
+
+// Initialize popup
+const popup = new PopupInterface();
+6. Background Script
+javascript
+// background.js
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('Tree-RAG Extension installed');
+});
+
+// Handle extension icon clicks
+chrome.action.onClicked.addListener((tab) => {
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ['tree-rag.js', 'content.js']
+  });
+});
+
+// Message passing between components
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle background processing if needed
+  if (message.action === 'processInBackground') {
+    // Process heavy computations here
+    processLargeData(message.data)
+      .then(result => sendResponse({ success: true, result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true; // Keep message channel open for async response
+  }
+});
+
+async function processLargeData(data) {
+  // Example: batch processing of large DOM trees
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({ processed: true, timestamp: Date.now() });
+    }, 1000);
+  });
+}
+Usage Examples
+Basic Query
+javascript
+// In popup or content script
+const results = await chrome.tabs.sendMessage(tabId, {
+  action: 'queryPage',
+  query: 'login button'
+});
+Find Specific Elements
+javascript
+const elements = await chrome.tabs.sendMessage(tabId, {
+  action: 'findElements',
+  criteria: {
+    query: 'submit form',
+    elementType: 'button'
+  }
+});
+//AI-Powered Analysis
+//javascript
+const aiClient = new AIClient('your-api-key');
+const analysis = await aiClient.analyzePageStructure(pageInfo);
+/* 
+Key Benefits
+Contextual Understanding: Tree structure provides semantic context
+Efficient Retrieval: Indexed tree allows fast querying
+Hierarchical Relationships: Preserves parent-child and sibling relationships
+Semantic Vectors: Creates searchable representations of DOM elements
+AI Integration: Provides rich context for AI models
+Scalable: Handles large DOMs efficiently
+Next Steps
+Implement proper embeddings instead of simple hashing
+Add vector similarity search
+Integrate with more sophisticated AI models
+Add caching for better performance
+Implement incremental updates for dynamic content
+ */

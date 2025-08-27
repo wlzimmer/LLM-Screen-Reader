@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI Test Extension",
+  "description": "AI Test Extension",
+  "version": "0.0",
+  "background": {
+    "service_worker": "background.js"
+  },
+  
+  "permissions": ["tabs", "storage", "tts"],
+  
+  "content_scripts": [
+    {
+      "js": ["./content.js"],
+      "matches": ["<all_urls>"],
+      "run_at": "document_end"
+    }
+  ]
+}
