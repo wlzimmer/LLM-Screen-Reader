@@ -1,4 +1,4 @@
-var rate = 1.5
+var rate = 2.
 var volume = 1.0
 var line = ''
 
@@ -19,15 +19,30 @@ chrome.runtime.onMessage.addListener(
 				console.log ('line', line)
 			} else {
 				if (line != '') {
-					callContext (tabs, 'log', msg[1])
-					callGPT ([{ role: "user", content: line }])
+//					callContext (tabs, 'log', msg[1])
+					callGPT ([
+          { role: 'system', content: `
+You are an AI assistant that analyzes web pages using structured tree data. 
+You have access to the DOM tree structure with hierarchical relationships.
+Use this context to provide accurate and relevant responses about the webpage content.
+
+Tree Context:
+// ${JSON.stringify(pageData.content, null, 2)}
+${JSON.stringify(treeRag, null, 2)}
+` },
+          { role: 'user', content: line }
+        ])
 					line = ''
 				} else speak ("stop")
 					
 			}
+		} else if (msg[0] == 'extractTreeRag') {
+//			console.log ('extractTreeRag', msg[1])
+			treeRag = JSON.parse(msg[1])
+			
 		} else if (msg[0] == 'extractPageData') {
 //			console.log ('extractPageData', msg[1])
-			var pageData = JSON.parse(msg[1])
+			pageData = JSON.parse(msg[1])
 			console.log ('pageData.content', pageData.content)
 			var content = JSON.stringify(pageData.content, null, 2)
 			console.log ('content', content)
@@ -47,6 +62,7 @@ chrome.runtime.onMessage.addListener(
 		} else if (msg[0] == 'Start') {
 			console.log ('Start')
 			callContext (tabs, 'extractPageData')
+			callContext (tabs, 'extractTreeRag')
 		}
 	});
 	return true;
@@ -75,6 +91,9 @@ function callContext () {
 }
 
 function speak (msg) {
-	console.log ('speak', msg)
-	chrome.tts.speak(msg, {'enqueue': true, 'lang': 'en-US', 'rate': rate, 'volume': volume})
+	sentences = msg.split('. ')
+	for (sentence of sentences) {
+		console.log ('speak', msg)
+		chrome.tts.speak(msg, {'enqueue': true, 'lang': 'en-US', 'rate': rate, 'volume': volume})
+	}
 }
