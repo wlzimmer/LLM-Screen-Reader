@@ -3,7 +3,8 @@ console.log ('content')
 callTable = {
 	'log': 				wlz_log,
 	'extractPageData':	wlz_extractPageData,
-	'extractTreeRag':	wlz_extractTreeRag
+	'extractTreeRag':	wlz_extractTreeRag,
+	'isRunning':		wlz_isRunning
 /* 	'splitMain': wlz_splitMain,
 	'domScraper': wlz_domScraper,	
 	'putValue': wlz_putValue,
@@ -19,7 +20,12 @@ callTable = {
 	'seqLookup': wlz_seqLookup */
 }
 
-chrome.runtime.sendMessage('Start:')
+
+isRunning = localStorage.getItem("isRunning");
+if (isRunning == 'true') 	isRunning = true
+else 						isRunning = false
+
+if (isRunning) chrome.runtime.sendMessage('Start: ' + localStorage.getItem("isRunning"))
 
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 	try {
@@ -43,19 +49,28 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 document.addEventListener('keydown', onKeyDown) // WTF Can't remove if document.onKeyDown
 function onKeyDown(event) {
-	try {
+	key = event.key;
+	if (event.ctrlKey && key == 'F1') {
+		isRunning = !isRunning
+		localStorage.setItem("isRunning", isRunning);
+		if (isRunning) chrome.runtime.sendMessage('Start:2')
+		event.stopPropagation();
+		event.preventDefault();
+	}
+	if (isRunning)  {
 		if (['Control', 'Shift', 'Alt'].includes(event.key)) return;
-		key = event.key;
 		if (event.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Enter', 'Backspace', 'Delete', 'End', 'Home', 'Insert', 'ScrollLock', 'Tab', 'Pause'].includes(key)) key = 'Shift-' + key.trim()
 		if(event.altKey) key = 'Alt-' + key
 		if (event.ctrlKey) key = 'Ctrl-'+ key
 		chrome.runtime.sendMessage('KEY:'+ key);
 		event.stopPropagation();
 		event.preventDefault();
-	} catch(err) {
-		  console.log ('*...content', err.message, err.stack);
-	}
+	} 
 };
+
+function wlz_isRunning () {
+	return isRunning 
+}
 
 function wlz_log () {
 	console.log ('<=' + (Array.from(arguments)).join())
