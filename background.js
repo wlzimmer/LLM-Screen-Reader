@@ -12,23 +12,23 @@ chrome.runtime.onMessage.addListener(
 	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 		let index = msg.indexOf(':');			// Ignore all but first ':'
 		msg = [msg.slice(0, index), msg.slice(index + 1)]
-		console.log ('msg', msg)
 		if (msg[0] == 'KEY') {
-			if (msg[1] != 'Enter') {
-//			speak (msg[1])
-				if (msg[1] == 'Backspace') {
-					line = line.slice(0,-1)
-				} else {
-					line += msg[1]
-				}
-				console.log ('line', line)
-			} else {
+			if (msg[1] == 'Enter') {
 				if (line != '') {
-					callGPT (treeRag, treeContext, "answer the question" + line)
-//					callGPT (pageData.content, pageDataContext, "answer the question" + line)
+					callGPT (treeRag, treeContext, "answer the question " + line)
+//					callGPT (pageData.content, pageDataContext, "answer the question " + line)
 					line = ''
-				} else speak ("stop")
-					
+				} else chrome.tts.stop();
+			} else {
+				if (msg[1] == 'Backspace') {
+					speak ('backspace ' + (line.slice(-1)==' '?'space':line.slice(-1)))
+//					speak ('backspace ' + line.slice(-1))
+					line = line.slice(0,-1)
+				} else if (msg[1].length == 1) {
+					line += msg[1]
+					speak (msg[1]==' '?'space':msg[1])
+				}
+				console.log ('line', line)			
 			}
 		} else if (msg[0] == 'extractTreeRag') {
 			console.log ('extractTreeRag'/* , msg[1] */)
@@ -43,8 +43,8 @@ chrome.runtime.onMessage.addListener(
 		} else if (msg[0] == 'Start') {
 			speak ('Start Chat G.P.T. Browser')
 			console.log ('Start')
-//			callContext (tabs, 'extractPageData')
-			callContext (tabs, 'extractTreeRag')
+//			callContent (tabs, 'extractPageData')
+			callContent (tabs, 'extractTreeRag')
 		}
 	});
 	return true;
@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener(
 
 function callGPT (rag, context, task) {
 	var API_KEY = "sk*****"
-	console.log ('final', " Read the following retrieved context from a webpage and " + task  + "\n\nRetrieved context (Web Content):\n" )
+	speak (task)
 	fetch("https://api.openai.com/v1/chat/completions", {
 	  method: "POST",
 	  headers: {
@@ -77,15 +77,12 @@ function callGPT (rag, context, task) {
 	}).then(response => response.json()).then(response => speak(JSON.stringify(response.choices[0].message.content).replace(/\\n/g, '\n').replace(/\\/g, '')));
 }
 
-function callContext () {
-	console.log ('callContext', arguments[1])
+function callContent () {
+	console.log ('callContent', arguments[1])
 	chrome.tabs.sendMessage(arguments[0][0].id, arguments[1] + ':' + Array.from(arguments).slice(2).join('`'))
 }
 
 function speak (msg) {
-	sentences = msg.split('. ')
-	for (sentence of sentences) {
-		console.log ('speak', msg)
-		chrome.tts.speak(msg, {'enqueue': true, 'lang': 'en-US', 'rate': rate, 'volume': volume})
-	}
+	console.log ('speak', msg)
+	chrome.tts.speak(msg, {'enqueue': false, 'lang': 'en-US', 'rate': rate, 'volume': volume})
 }
