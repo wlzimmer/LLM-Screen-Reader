@@ -4,8 +4,8 @@ callTable = {
 	'log': 				wlz_log,
 	'extractPageData':	wlz_extractPageData,
 	'extractTreeRag':	wlz_extractTreeRag,
-	'isRunning':		wlz_isRunning
-/* 	'splitMain': wlz_splitMain,
+	'isRunning':		wlz_isRunning,
+	'splitMain': wlz_splitMain,
 	'domScraper': wlz_domScraper,	
 	'putValue': wlz_putValue,
 	'click': wlz_click,
@@ -17,7 +17,7 @@ callTable = {
 	'reload': wlz_reload,
 	'current': wlz_current,
 	'seqMap': 'wlz_seqMap',
-	'seqLookup': wlz_seqLookup */
+	'seqLookup': wlz_seqLookup
 }
 
 
@@ -40,7 +40,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 				console.log (msg[0] + ':' + JSON.stringify(ret))
 				chrome.runtime.sendMessage(msg[0] + ':' + JSON.stringify(ret))
 			}
-		} else console.log ('...', msg[1])
+		} else console.log ('...Unknown function', msg[0])
 		return false;
 	} catch(err) {
 		  console.log ('*...content', err.message, err.stack/* , '-', msg[0], ':', msg[1].slice(0,80), '-', ret.slice(0,80) */);
@@ -100,24 +100,33 @@ function wlz_extractPageData() {
 }
 /* 
       id: nodeId,
-      tagName: element.tagName?.toLowerCase(),
+*     tagName: element.tagName?.toLowerCase(),
       textContent: this.getCleanText(element),
       attributes: node.Role
-      position: node.Rect,
+*     position: node.Rect,
       visibility: node.isVisible,
       children: node.Children,
       parent: node.Parent,
-      depth: 0
+*      depth: 0
  */
 function wlz_extractTreeRag() {
 	wlz_domScraper ()
-	var treeRagArray = []
-	console.log ('extractTreeRag')
-	for (node of linearTree) {
-		treeRagArray.push({Type: node.Role?node.Role:node.Click!=-1?'link':'', Id: node.Seq, TextContent: node.Label.replace(/\\n/g, '\n'), Children: node.Children.map(c=> c.Seq), Parent: node.Parent.Seq})
-		console.log (JSON.stringify(treeRagArray.slice(-1)), '\n')
+	return walkTreeRAG (root)
+}
+
+function walkTreeRAG (node, depth=0) {
+	var ragNode = {
+		Type: 			node.Role?node.Role:node.Click!=-1?'link':'', 
+		Id: 			node.Seq, 
+		TextContent:	node.Label.replace(/\\n/g, '\n'), 
+		Position:		'X='+ (node.X) + ', Y=' + (node.Y) + ', Width='+ (node.W) + ', Height'  + (node.H),
+		Depth:			depth,
+		Children: 		[], 
+		Parent: 		node.Parent.Seq
 	}
-	return treeRagArray
+	console.log ('walkTreeRag', JSON.stringify(ragNode))
+    ragNode.Children = node.Children.map(child => walkTreeRAG(child, depth+1));
+	return ragNode
 }
 
 function udef0 (val) {
@@ -1917,8 +1926,9 @@ function bottomUp (node, count=0) {
 
 
 
-function setId (node, level = 0) {
+function setId (node, level=0) {
 	if (level == 0) nodeById = {}
+	node.Level = level
 	
 	if (node.Id == '' && node.Parent != null /* && node.Parent.uiChildren != null */) {
 		node.hashTag = getHashTag (node) /* + node.ChildTags */
@@ -2358,7 +2368,7 @@ node.TextNodes = textNodes.map(c=> c.Text).join(',')
 	if (labelNode != null) {
 		node.Label = labelNode.Text
 //		if (node.Role == '') 
-		node.Role = 'Heading!, '
+		node.Role = 'heading'
 		if (labelNode.Click != -1) labelNode.Label = labelNode.Text
 		else 						deleteNode(labelNode, 'findLabels')
 		labelNode.IsLabel = node.Seq
@@ -2904,7 +2914,8 @@ function wlz_putValue(seq, value) {
 //	if (node.data['Click'] != -1):
 //			callJs('click', node.data['Id'])
 function wlz_click(seq) {
-	console.log ('click', seq, nodeLookup[seq].Seq)
+	console.log('nodeLookup', Array.from(Object.keys(domNode)))
+	console.log ('click', seq, domNode[seq].Seq)
 	if (domNode[seq] == null) return
 	let node = domNode[seq]
 	if (node.selected != null) {
