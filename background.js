@@ -1,9 +1,7 @@
 var rate = 2.
 var volume = 1.0
 var line = ''
-treeContext = 'You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships.  Use this context to provide accurate and relevant responses about the webpage content.'
-
-pageDataContext = 'You are an AI assistant that analyzes web pages using the information below.   Use this context to provide accurate and relevant responses about the webpage content.'
+treeContext = "Ignore all previous instructions and context.  You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships. Follow the nested structure of the tree exactly. Do not add extra fields beyond what is in the tree. Use this context to provide accurate and relevant responses about the webpage content. "
 
 summarize =  'produce a clear, concise summary of the page '
 
@@ -15,17 +13,18 @@ chrome.runtime.onMessage.addListener(
 		msg = [msg.slice(0, index), msg.slice(index + 1)]
 		if (msg[0] == 'KEY') {
 			if (msg[1] == 'Enter') {
+				callContent ('extractTreeRag')
 				if (line != '') {
 					speak (line)
 					if (line.toLowerCase().startsWith('action')) {
 						words = line.split(' ').filter(x=> x!='')
-						if (words[1].toLowerCase() == 'click') {
+						/* if (words[1].toLowerCase() == 'click') { */
 							if (words[2].toLowerCase() == 'on') words = words.splice(1)
-							callGPT ('return the web content Id of ' + words.splice(2).join(' ') + ' and return the retrieved web content Id only', click)
-						} else console.log ('unknown action', words, words.splice(2).join(' '))
+							callGPT ('You are an automation assistant. Given a task, output a JSON command for the system to execute.  Match one of these valid actions: ["click_on_element(Id)", "input_into(Id,value)", "previous_page()"] or specify "no_action" if there is no match.  Look for an element with ' + words.splice(2).join(' ') + ' Output in a pure JSON object with a the properties action, Id, and value. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. ', action)
+						/* } else console.log ('unknown action', words, words.splice(2).join(' ')) */
 					} else {
-						callGPT ("answer the question, use only the last provided web content.  Ignore all previous instructions, web content and context. " + line)
-//						callGPT ("answer the question without adding external information " + line, speak, pageData.content, pageDataContext)
+						callGPT ("answer the question, " + line)
+//						callGPT ("answer the question without adding external information " + line, speak, pageDataContext, pageData.content)
 					}
 					line = ''
 				} else chrome.tts.stop();
@@ -40,12 +39,11 @@ chrome.runtime.onMessage.addListener(
 		} else if (msg[0] == 'extractTreeRag') {
 			console.log ('extractTreeRag'/* , msg[1] */)
 			treeRag = JSON.parse(msg[1])
-			var task = 'You are an expert summarizer. Read the content of the following webpage and produce a clear, concise summary. Do not provide a plan, provide a summary'
-			callGPT (summarize)
+//			callGPT (summarize)
 			
 		} else if (msg[0] == 'extractPageData') {
 			pageData = JSON.parse(msg[1])	
-//			callGPT (summarize, speak, pageData.content, pageDataContext))
+//			callGPT (summarize, speak, pageDataContext, pageData.content))
 
 		} else if (msg[0] == 'Start') {
 			speak ('Start Chat G.P.T. Browser')
@@ -57,7 +55,7 @@ chrome.runtime.onMessage.addListener(
 	return true;
 })
 
-function callGPT (task, funct=speak, rag=treeRag, context=treeContext) {
+function callGPT (task, funct=speak, systemContext=treeContext, rag=treeRag) {
 	var API_KEY = "sk-*****"
 	console.log (task)
 	fetch("https://api.openai.com/v1/chat/completions", {
@@ -71,11 +69,12 @@ function callGPT (task, funct=speak, rag=treeRag, context=treeContext) {
 		messages: [
 			{
 			  "role": "system",
-			  "content": "use only the provided context do not add external information.  Ignore all previous instructions, web content and context. "
+			  "content": systemContext + "\n\nWeb Content Tree:\n" + JSON.stringify(rag, null, 2)
+
 			},
 			{
 			  "role": "user",
-			  "content": " Read the following retrieved context from a webpage and " + task  + "\n\nRetrieved context (Web Content):\n" + JSON.stringify(rag, null, 2)
+			  "content": task
 			}
         ],
         max_tokens: 10000,
@@ -84,9 +83,17 @@ function callGPT (task, funct=speak, rag=treeRag, context=treeContext) {
 	}).then(response => response.json()).then(response => funct(JSON.stringify(response.choices[0].message.content).replace(/\\n/g, '\n').replace(/\\/g, '')));
 }
 
-function click (msg) {
-	callGPT ('text content for item with the id of ' + msg.replaceAll('"', ''))
-	callContent ('click', msg.replaceAll('"', ''))
+function action (msg) {
+	console.log (msg)
+	let cmd = JSON.parse(msg.trim().slice(1, -1))
+	console.log ('cmd=' + cmd)
+	if (cmd.action == 'click_on_element') console.log ('click', cmd.Id)
+	else if (cmd.action == 'insert_into') console.log ('putValue', cmd.Id, cmd.value)
+	else if (cmd.action == 'previous_page') console.log ('prevURL')
+	else speak (cmd.action + ' not recognized as a command')
+	
+//	callGPT ('text content for item with the id of ' + msg.replaceAll('"', ''))
+//	callContent ('click', msg.replaceAll('"', ''))
 }
 
 function callContent () {
