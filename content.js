@@ -4,7 +4,7 @@ callTable = {
 	'log': 				wlz_log,
 	'extractPageData':	wlz_extractPageData,
 	'extractTreeRag':	wlz_extractTreeRag,
-	'isRunning':		wlz_isRunning,
+//	'isRunning':		wlz_isRunning,
 	'splitMain': wlz_splitMain,
 	'domScraper': wlz_domScraper,	
 	'putValue': wlz_putValue,
@@ -21,6 +21,7 @@ callTable = {
 }
 
 
+//localStorage.setItem("isRunning", false);
 isRunning = localStorage.getItem("isRunning");
 if (isRunning == 'true') 	isRunning = true
 else 						isRunning = false
@@ -37,7 +38,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 			var ret = callTable[msg[0]] (...msg[1].split('`'))
 			if (ret != null) {
 				console.log ('ret != null', ret)
-				console.log (msg[0] + ':' + JSON.stringify(ret))
+				console.log (msg[0] + ':' + JSON.stringify(ret).slice(0, 256))
 				chrome.runtime.sendMessage(msg[0] + ':' + JSON.stringify(ret))
 			}
 		} else console.log ('...Unknown function', msg[0])
@@ -68,9 +69,9 @@ function onKeyDown(event) {
 	} 
 };
 
-function wlz_isRunning () {
+/* function wlz_isRunning () {
 	return isRunning 
-}
+} */
 
 function wlz_log () {
 	console.log ('<=' + (Array.from(arguments)).join())
@@ -116,13 +117,17 @@ function wlz_extractTreeRag() {
 
 function walkTreeRAG (node, depth=0) {
 	var ragNode = {
-		Type: 			node.Role?node.Role:node.Click!=-1?'link':'', 
-		Id: 			node.Seq, 
+		Type: 			node.Role,
+		Clickable:		node.Click != -1, 
+		Field:			node.TagName == 'TEXTAREA' || ('text','file','date','time','number','email','password','username').includes(node.Type) || ('textbox','searchbox').includes(node.Role),
+		Heading:		node.Role == 'heading',
+		Value:			node.Value,
+		Id: 			node.Id, 
 		TextContent:	node.Label.replace(/\\n/g, '\n'), 
 		Position:		'X='+ (node.X) + ', Y=' + (node.Y) + ', Width='+ (node.W) + ', Height'  + (node.H),
 		Depth:			depth,
 		Children: 		[], 
-		Parent: 		node.Parent.Seq
+		Parent: 		node.Parent.I
 	}
 	console.log ('walkTreeRag', JSON.stringify(ragNode))
     ragNode.Children = node.Children.map(child => walkTreeRAG(child, depth+1));
@@ -206,6 +211,16 @@ nuNode.TextNodes = []
 	nuNode.Node = node;
 	nuNode.Seq = seq++;
 	domNode[nuNode.Seq] = node;
+	
+	nuNode.Id = node.id;
+/* 	if (nuNode.Id == '') {
+//		if (node.Xid != '')	console.log('..Xid', node.Seq, node.Xid)
+		if (node.id != '')	{console.log('..id', node.Seq, node.id); nuNode.Id = node.id}
+		else 					nuNode.Id = hashCode (window.crypto.randomUUID())
+	}// else console.log ('old Id', nuNode.Id)
+//	uuidNode[nuNode.Id] = node; */
+//	console.log ('..Id', nuNode.Id)
+
 	progNode[nuNode.Seq] = nuNode;
 	nuNode.Time = Math.round(new Date()%(24*60*60*1000)/1000)
 	if (!node.hasAttribute('wlz_time')) setAttribute (nuNode,'wlz_time', nuNode.Time)
@@ -216,7 +231,6 @@ nuNode.TextNodes = []
 	nuNode.ClickURL = udefEmpty(node.getAttribute('onclick'))
 	if (nuNode.ClickURL != '') nuNode.Click = nuNode.Seq
 	nuNode.TagName = node.tagName.toUpperCase();
-	nuNode.Id = node.id;
 	nuNode.Opacity = style.getPropertyValue("opacity");
 	nuNode.TabIndex = node.getAttribute("tabindex");
 	if (nuNode.TabIndex == null) nuNode.TabIndex = 0;
@@ -1588,10 +1602,10 @@ function computeRoles (node) {
 
 		if (newNodeList.length > 0) {
 			if (roleDef.length > 2) {
-				console.log ('newNodeList0', newNodeList)
+//				console.log ('newNodeList0', newNodeList)
 				specialNodes = specialNodes.concat(roleDef[2](newNodeList).Seq)
 			} else {
-				console.log ('newNodeList1', newNodeList)
+//				console.log ('newNodeList1', newNodeList)
 				specialNodes = specialNodes.concat(newNodeList.map(n=> n.Seq))
 			}
 			if (specialNodes.length >0 && specialNodes.slice(-1)[0] != 0)
@@ -2554,6 +2568,7 @@ function scrollAll (node) {
 function startMain () {
 	log ('domScraper', root.TagName);
 //	prevRoot = root
+//	console.log ('*...startMain', Object.keys(uuidNode).filter(n=> n.id!='').length)
 	root = walkDom (document.body, 0, root);
 	screenW = root.W;
 	screenH = root.H
@@ -2627,6 +2642,28 @@ function finishMain () {
 			}
 		}
 	}
+// copy oldId to new Dom nodes
+	if (typeof olduuidNode != 'undefined') for (var id in olduuidNode) {
+		domNode = olduuidNode[id]
+		if (domNode.isConnected && domNode.id == '') {
+			domNode.id = id
+			console.log ('oldDomNode.id', id)
+		} 
+	}
+// 	copy Id from dom nodes to nodes
+	walkTree (root, (n=> {
+		if (n.Id == '' && n.Node.id != '') n.Id = n.Node.id
+//		uuidNode[n.Id] = n.Node
+	}))
+// set new nodes to new random values	
+	setRandomIds(root)
+	
+	walkTree (root, (n=> {
+//		if (n.Id == '') n.Id = n.Node.id
+		uuidNode[n.Id] = n.Node
+	}))
+	
+
 	let cmp = (a, b) => (a > b) - (a < b)
 	rootText.push (JSON.stringify(specialNodes))
 	
@@ -2863,11 +2900,17 @@ function wlz_domScraper () {
 	alert = null;
 	actionIdx = 0
 	//buildNodeLookup = {}; // htmlElement by Id
+	if (typeof uuidNode != 'undefined') olduuidNode = { ...uuidNode }
+	else								olduuidNode = {}
 	if (typeof domNode != 'undefined') oldDomNode = { ...domNode }
 	else								oldDomNode = {}
 	if (typeof domIdLabel != 'undefined') olddomIdLabel = { ...domIdLabel }
 	else								olddomIdLabel = {}
 	
+//	console.log ('*...uuId count', count, typeof uuidNode, typeof domNode)
+//	console.log('length', Object.keys(uuidNode).filter(n=> n.id!='').length)
+
+	uuidNode = new Map() 
 	domNode = {};   //  htmlElement by Seq
 	domIdLabel = {}
 	prevNodeById = {}
@@ -2914,10 +2957,10 @@ function wlz_putValue(seq, value) {
 //	if (node.data['Click'] != -1):
 //			callJs('click', node.data['Id'])
 function wlz_click(seq) {
-	console.log('nodeLookup', Array.from(Object.keys(domNode)))
-	console.log ('click', seq, domNode[seq].Seq)
-	if (domNode[seq] == null) return
-	let node = domNode[seq]
+	console.log('nodeLookup', Array.from(Object.keys(uuidNode)))
+	if (uuidNode[seq] == null) return console.log('uuidNode[seq] == null')
+	console.log ('click', seq)
+	let node = uuidNode[seq]
 	if (node.selected != null) {
 		node.selected=(!(node.selected=='true')).toString();
 		console.log ('--', node.selectedIndex)//, node.options[node.selectedIndex].text)
@@ -2929,6 +2972,7 @@ function wlz_click(seq) {
 	node.dispatchEvent(new Event('mousedown', { 'bubbles': true }));
 	node.dispatchEvent(new Event('mouseup', { 'bubbles': true }));
 	node.click();
+	console.log ('clicked', node.getAttribute('wlz_seq'))
 }
 
 //def scrollTo(node):
