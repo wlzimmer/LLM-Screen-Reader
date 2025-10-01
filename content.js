@@ -2944,10 +2944,10 @@ function wlz_domScraper () {
 }
 
 //def putValue(current, value):
-function wlz_putValue(seq, value) {
-	console.log ('putValue', seq, value, nodeLookup[seq].Seq)
-	if (domNode[seq] == null) return
-	let node = domNode[seq]
+function wlz_putValue(id, value) {
+	console.log ('putValue', id, value)
+	if (uuidNode[id] == null) return
+	let node = uuidNode[id]
 	node.value = value
 		node.Node.dispatchEvent(new Event('dataavailable', { 'bubbles': true }));
 }
@@ -2956,11 +2956,11 @@ function wlz_putValue(seq, value) {
 //def click(node):
 //	if (node.data['Click'] != -1):
 //			callJs('click', node.data['Id'])
-function wlz_click(seq) {
+function wlz_click(id) {
 	console.log('nodeLookup', Array.from(Object.keys(uuidNode)))
-	if (uuidNode[seq] == null) return console.log('uuidNode[seq] == null')
-	console.log ('click', seq)
-	let node = uuidNode[seq]
+	if (uuidNode[id] == null) return console.log('uuidNode[id] == null')
+	console.log ('click', id)
+	let node = uuidNode[id]
 	if (node.selected != null) {
 		node.selected=(!(node.selected=='true')).toString();
 		console.log ('--', node.selectedIndex)//, node.options[node.selectedIndex].text)
@@ -2976,24 +2976,23 @@ function wlz_click(seq) {
 }
 
 //def scrollTo(node):
-function wlz_scrollTo (seq) {
-//	console.log ('scrollTo', seq, domNode[seq])
-	if (domNode[seq] == null) return
-	domNode[seq].scrollIntoView(true);
+function wlz_scrollTo (id) {
+//	console.log ('scrollTo', id, uuidNode[id])
+	if (uuidNode[id] == null) return
+	uuidNode[id].scrollIntoView(true);
 }
 
 //def scrollScreen(y):
 function wlz_scrollScreen(y) {
-	console.log ('scrollScreen', seq, nodeLookup[seq])
-	if (domNode[seq] == null) return
+	console.log ('scrollScreen', y)
 	window.scrollBy (0, y)
 }
 	
-function wlz_drawBorder (seq, border) {
-//	console.log ('wlz_drawBorder', seq, border, domNode[seq])
-	if (domNode[seq] == null) return console.log ('wlz_drawborder domNode does not exist')
+function wlz_drawBorder (id, border) {
+//	console.log ('wlz_drawBorder', id, border, uuidNode[id])
+	if (uuidNode[id] == null) return console.log ('wlz_drawborder uuidNode does not exist')
 	try {
-		let node = domNode[seq]
+		let node = uuidNode[id]
 //		console.log ('node==null', node==null)
 		if (node != null) {
 //			console.log ('node != null', node != null)
@@ -3024,17 +3023,17 @@ function wlz_reload () {
 }
 
 function wlz_seqMap () {
-	if (typeof oldDomNode == 'undefined') return console.log ('oldDomNode == undefined')
+	if (typeof olduuidNode == 'undefined') return console.log ('olduuidNode == undefined')
 console.log ('wlz_seqMap')	
 
-	for (seq in Object.keys(oldDomNode)) {
-		node = oldDomNode[seq]
+	for (id in Object.keys(olduuidNode)) {
+		node = olduuidNode[id]
 		if (node.isConnected) {
-			if (seq != parseInt(node.getAttribute('wlz_seq')))
-				console.log ('..', seq, ' - ', parseInt(node.getAttribute('wlz_seq')))
+			if (id != parseInt(node.getAttribute('wlz_seq')))
+				console.log ('..', id, ' - ', parseInt(node.getAttribute('wlz_seq')))
 			else console.log ('same')
 		} else 
-			console.log ('..', seq, 'Missing')
+			console.log ('..', id, 'Missing')
 	}
 }
 
@@ -3053,9 +3052,9 @@ function wlz_current (oldSeq) {
 	}
 }
 
-function wlz_seqLookup (seq) {
-	if (!(seq in domNode)) return 'not found'
+function wlz_seqLookup (id) {
+	if (!(id in uuidNode)) return 'not found'
 	
-	return (domNode[seq].getAttributeNames().map(a=> a+'='+domNode[seq].getAttribute(a))).join (', ')
+	return (uuidNode[id].getAttributeNames().map(a=> a+'='+uuidNode[id].getAttribute(a))).join (', ')
 
 }

@@ -1,7 +1,12 @@
 var rate = 2.
 var volume = 1.0
 var line = ''
-treeContext = "Ignore all previous instructions and context.  You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships. Follow the nested structure of the tree exactly. Ignore any previous DOM Tree structure, use only the current DOM Tree.  Do not add extra fields beyond what is in the tree. Use this context to provide accurate and relevant responses about the webpage content. "
+var lastId = 0
+sysContext = "Ignore all previous instructions and context.  You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships. Follow the nested structure of the tree exactly. Ignore any previous DOM Tree structure, use only the current DOM Tree.  Do not add extra fields beyond what is in the tree. Use this context to provide accurate and relevant responses about the webpage content. "
+
+task0 = 'You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"'
+
+task1 = '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. '
 
 summarize =  'produce a clear, concise summary of the page '
 
@@ -13,18 +18,31 @@ chrome.runtime.onMessage.addListener(
 		msg = [msg.slice(0, index), msg.slice(index + 1)]
 		if (msg[0] == 'KEY') {
 			if (msg[1] == 'Enter') {
-//				callContent ('extractTreeRag')
+				callContent ('extractTreeRag')
 				if (line != '') {
 					speak (line)
+					var words = line.split(' ').filter(x=> x!='').slice(1)
 					console.log ('startswith', line.toLowerCase().startsWith('click'))
 					if (line.toLowerCase().startsWith('click')) {
 						deleteTreeRAG (treeRag, (n=> !n.Clickable))
 //						showTreeRAG(treeRag)
-						words = line.split(' ').filter(x=> x!='')
-							if (words[1].toLowerCase() == 'on') words = words.splice(1)
-							callGPT ('You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"' + words.splice(1).join(' ') + '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. ', actionClick)
+						if (words[0].toLowerCase() == 'on') words = words.splice(1)
+						callGPT (task0 + words.join(' ') + task1, actionClick)
 						
-						/* Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json). */
+					} else if (line.toLowerCase().startsWith('input')) {
+						deleteTreeRAG (treeRag, (n=> !n.FormField))
+						if (words[0].toLowerCase() == 'on') words = words.splice(1)
+						callGPT (task0 + words.join(' ') + task1, actionInput)
+						
+					} else if (line.toLowerCase().startsWith('find')) {
+						
+					} else if (line.toLowerCase().startsWith('back')) {
+						callContent ('prevURL')
+						
+					} else if (line.toLowerCase().startsWith('page')) {
+						callContent ('newURL', words.join(' '))
+						
+//					} else if (line.toLowerCase().startsWith('click')) {
 					} else {
 						callGPT ("answer the question, " + line)
 					}
@@ -51,7 +69,7 @@ chrome.runtime.onMessage.addListener(
 	return true;
 })
 
-function callGPT (task, funct=speak, rag=treeRag, systemContext=treeContext) {
+function callGPT (task, funct=actionSpeak, rag=treeRag, model="gpt-4.1-nano", systemContext=sysContext) {
 	var API_KEY = "sk-*****"
 	console.log (task)
 	fetch("https://api.openai.com/v1/chat/completions", {
@@ -61,7 +79,7 @@ function callGPT (task, funct=speak, rag=treeRag, systemContext=treeContext) {
 		"Authorization": `Bearer ${API_KEY}`
 	  },
 	  body: JSON.stringify({
-		model: "gpt-4.1-nano",
+		model: model, 
 		messages: [
 			{
 			  "role": "system",
@@ -76,27 +94,20 @@ function callGPT (task, funct=speak, rag=treeRag, systemContext=treeContext) {
         max_tokens: 10000,
         temperature: 0.0
 	  })
-	}).then(response => response.json()).then(response => funct(JSON.stringify(response.choices[0].message.content).replace(/\\n/g, '\n').replace(/\\/g, '')));
+	}).then(response => response.json()).then(response => funct(response));
 }
+//.replace(/\\n/g, '\n').replace(/\\/g, '')
 
 function actionClick (msg) {
-	console.log (msg)
-	let cmd = JSON.parse(msg.trim().slice(1, -1))
-	console.log ('cmd=' + JSON.stringify(cmd))
+	let cmd = parseAction (msg)
+	if (!cmd) return
 	callContent ('click', cmd.Id)
 }
 
-function action (msg) {
-	console.log (msg)
-	let cmd = JSON.parse(msg.trim().slice(1, -1))
-	console.log ('cmd=' + JSON.stringify(cmd))
-	if (cmd.action == 'click') callContent ('click', cmd.Id)
-	else if (cmd.action == 'input') callContent ('putValue', cmd.Id, cmd.value)
-	else if (cmd.action == 'back') callContent ('prevURL')
-	else speak (cmd.action + ' not recognized as a command')
-	
-//	callGPT ('text content for item with the id of ' + msg.replaceAll('"', ''))
-//	callContent ('click', msg.replaceAll('"', ''))
+function actionInput (msg) {
+	let cmd = parseAction (msg)
+	if (!cmd) return
+	callContent ('putValue', cmd.Id, cmd.value)
 }
 
 function callContent () {
@@ -104,19 +115,23 @@ function callContent () {
 	chrome.tabs.sendMessage(tabs[0].id, arguments[0] + ':' + Array.from(arguments).slice(1).join('`'))
 }
 
-function afterAction (msg) {
-	var lines = msg.split ('\n')
-	var confidence = parseInt(lines[2].split(' ')[1])
-	if (lines[2] == '0%' || confidence < 70) {
+function parseAction (response) {
+	console.log (response.choices[0].message.content)
+	let cmd = JSON.parse(response.choices[0].message.content)
+	let confidence = parseInt(cmd.Confidence)
+	let textContent = selectTree(treeRag, (n=> n.Id == cmd.Id)).map(n=> n.TextContent)
+	console.log ('textContent', textContent)
+	if (confidence == 0 || confidence < 70 || textContent.length != 1) {
 		speak ('Try rephrasing your request')
-	} else {
-		speak (line[0])
-		let cmd = JSON.parse(msg.trim().slice(1, -1))
-		if (cmd.action == 'click_on_element') console.log ('click', cmd.Id)
-		else if (cmd.action == 'input_into') console.log ('putValue', cmd.Id, cmd.value)
-		else if (cmd.action == 'previous_page') console.log ('prevURL')
-		else speak (cmd.action + ' not recognized as a command')
+		return null
 	}
+	lastId = cmd.Id
+	speak (textContent[0])
+	return cmd
+}
+
+function actionSpeak (response) {
+	speak (JSON.stringify(response.choices[0].message.content))
 }
 
 function deleteTreeRAG (node, funct) {
@@ -134,6 +149,12 @@ function deleteTreeRAG (node, funct) {
 function showTreeRAG (node) {
 	console.log ('showTreeRAG', node.Id, node.Clickable, node.TextContent)
 	node.Children.forEach (n=> showTreeRAG(n))
+}
+
+function selectTree (node, funct, result=[]) {
+	if (funct(node)) result.push(node)
+	node.Children.map(child => result = selectTree(child,  funct, result));
+	return result
 }
 
 function speak (msg) {
