@@ -2,12 +2,6 @@ var rate = 2.
 var volume = 1.0
 var line = ''
 var lastId = 0
-sysContext = "Ignore all previous instructions and context.  You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships. Follow the nested structure of the tree exactly. Ignore any previous DOM Tree structure, use only the current DOM Tree.  Do not add extra fields beyond what is in the tree. Use this context to provide accurate and relevant responses about the webpage content. "
-
-task0 = 'You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"'
-
-task1 = '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. '
-
 summarize =  'produce a clear, concise summary of the page '
 
 chrome.runtime.onMessage.addListener(
@@ -35,7 +29,27 @@ chrome.runtime.onMessage.addListener(
 						callGPT (task0 + words.join(' ') + task1, actionInput)
 						
 					} else if (line.toLowerCase().startsWith('find')) {
-						
+						var API_KEY = "sk-*****"
+						var texts = ["send email to Alice","schedule a meeting tomorrow","remind me to buy milk"]
+						fetch("https://api.openai.com/v1/embeddings", {
+							method: "POST",
+							headers: {
+							  "Content-Type": "application/json",
+								"Authorization": `Bearer ${API_KEY}`
+							},
+							body: JSON.stringify({
+							  model: "text-embedding-3-small", // ✅ must be an embedding model
+							  input: texts
+							})
+						  })
+						  .then(response => {
+							if (!response.ok) {
+							  console.log ('error', response.status);
+							}
+							return response.json();
+						  })
+						  .then(data => console.log (data.data.map(item => item.embedding)));
+									
 					} else if (line.toLowerCase().startsWith('back')) {
 						callContent ('prevURL')
 						
@@ -44,7 +58,7 @@ chrome.runtime.onMessage.addListener(
 						
 //					} else if (line.toLowerCase().startsWith('click')) {
 					} else {
-						callGPT ("answer the question, " + line)
+						ragGPT ("answer the question, " + line)
 					}
 					line = ''
 				} else chrome.tts.stop();
@@ -69,31 +83,37 @@ chrome.runtime.onMessage.addListener(
 	return true;
 })
 
-function callGPT (task, funct=actionSpeak, rag=treeRag, model="gpt-4.1-nano", systemContext=sysContext) {
+function ragGPT (line, funct=actionSpeak, rag=treeRag) {
+	console.log (line)
+//	rag = '**RAG**'
+	body = {
+		model: "gpt-4.1-nano", 
+		messages: [
+			{
+			  "role": "system",
+			  "content": "Ignore all previous instructions and context.  You are an AI assistant that analyzes web pages using structured tree data. You have access to the DOM tree structure with hierarchical relationships. Follow the nested structure of the tree exactly. Ignore any previous DOM Tree structure, use only the current DOM Tree.  Do not add extra fields beyond what is in the tree. Use this context to provide accurate and relevant responses about the webpage content. " + "\n\nWeb Content Tree:\n" + JSON.stringify(rag, null, 2)
+			},
+			{
+			  "role": "user",
+			  "content": 'You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"' + line + '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. '
+			}
+        ],
+        max_tokens: 10000,
+        temperature: 0.0
+	}
+	console.log (body)
+	callGPT (body, funct, "https://api.openai.com/v1/chat/completions")
+}
+
+function callGPT (body, funct, endpoint) {
 	var API_KEY = "sk-*****"
-	console.log (task)
-	fetch("https://api.openai.com/v1/chat/completions", {
+	fetch(endpoint, {
 	  method: "POST",
 	  headers: {
 		"Content-Type": "application/json",
 		"Authorization": `Bearer ${API_KEY}`
 	  },
-	  body: JSON.stringify({
-		model: model, 
-		messages: [
-			{
-			  "role": "system",
-			  "content": systemContext + "\n\nWeb Content Tree:\n" + JSON.stringify(rag, null, 2)
-
-			},
-			{
-			  "role": "user",
-			  "content": task
-			}
-        ],
-        max_tokens: 10000,
-        temperature: 0.0
-	  })
+	  body: JSON.stringify(body)
 	}).then(response => response.json()).then(response => funct(response));
 }
 //.replace(/\\n/g, '\n').replace(/\\/g, '')
