@@ -2,6 +2,9 @@ var rate = 2.
 var volume = 1.0
 var line = ''
 var lastId = 0
+task0 = 'You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"'
+
+task1 = '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. '
 summarize =  'produce a clear, concise summary of the page '
 
 chrome.runtime.onMessage.addListener(
@@ -21,34 +24,20 @@ chrome.runtime.onMessage.addListener(
 						deleteTreeRAG (treeRag, (n=> !n.Clickable))
 //						showTreeRAG(treeRag)
 						if (words[0].toLowerCase() == 'on') words = words.splice(1)
-						callGPT (task0 + words.join(' ') + task1, actionClick)
+						ragGPT (task0 + words.join(' ') + task1, actionClick)
 						
 					} else if (line.toLowerCase().startsWith('input')) {
 						deleteTreeRAG (treeRag, (n=> !n.FormField))
 						if (words[0].toLowerCase() == 'on') words = words.splice(1)
-						callGPT (task0 + words.join(' ') + task1, actionInput)
+						ragGPT (task0 + words.join(' ') + task1, actionInput)
 						
 					} else if (line.toLowerCase().startsWith('find')) {
-						var API_KEY = "sk-*****"
 						var texts = ["send email to Alice","schedule a meeting tomorrow","remind me to buy milk"]
-						fetch("https://api.openai.com/v1/embeddings", {
-							method: "POST",
-							headers: {
-							  "Content-Type": "application/json",
-								"Authorization": `Bearer ${API_KEY}`
-							},
-							body: JSON.stringify({
+						var body = {
 							  model: "text-embedding-3-small", // ✅ must be an embedding model
 							  input: texts
-							})
-						  })
-						  .then(response => {
-							if (!response.ok) {
-							  console.log ('error', response.status);
 							}
-							return response.json();
-						  })
-						  .then(data => console.log (data.data.map(item => item.embedding)));
+						callGPT (body, data => console.log (data.data.map(item => item.embedding)), "https://api.openai.com/v1/embeddings")
 									
 					} else if (line.toLowerCase().startsWith('back')) {
 						callContent ('prevURL')
@@ -86,7 +75,7 @@ chrome.runtime.onMessage.addListener(
 function ragGPT (line, funct=actionSpeak, rag=treeRag) {
 	console.log (line)
 //	rag = '**RAG**'
-	body = {
+	var body = {
 		model: "gpt-4.1-nano", 
 		messages: [
 			{
@@ -95,7 +84,7 @@ function ragGPT (line, funct=actionSpeak, rag=treeRag) {
 			},
 			{
 			  "role": "user",
-			  "content": 'You are a web assistant looking for the Id of an element with TextContent that contains the most of the words \"' + line + '\". If, in addition to the element, the command has a value, set the value in your response, otherwise set the value to blank. Rate your confidence in your answer on a scale from 0–100%. Base this rating only on how explicitly the information is stated in the provided text. If the information is not mentioned in the text, return Confidence: 0% Output in a pure JSON object with a the properties Id, value and Confidence. response_format={"type":"json_object"}.  Do NOT wrap JSON in quotes. Do NOT use markdown code fences (no ```json).  If data is missing, set the field value to "" (empty string).  Do not explain. '
+			  "content": line
 			}
         ],
         max_tokens: 10000,
